@@ -1,0 +1,42 @@
+fixtures:
+ - books_api
+ - books_data
+ - http_capture
+tests:
+ - name: create a new book and capture response values
+   POST: /books
+   data:
+     title: Capture Test Book
+     published_on: 2024-01-01
+     pages: 300
+     author_id: $.authors.by_name["Ernest Hemingway"].id
+     publisher_id: $.publishers.by_name["Charles Scribner's Sons"].id
+   capture:
+     book_id: "$.id"
+     book_title: "$.title"
+   assert:
+     status: 201
+     headers:
+      - Location
+     json:
+       paths:
+         $.title: Capture Test Book
+ - name: get the created book using captured ID
+   GET: /books/{book_id}
+   assert:
+     status: 200
+     json:
+       paths:
+         $.id: "{book_id}"
+         $.title: "{book_title}"
+ - name: update book with captured values
+   PUT: /books/{book_id}
+   data:
+     title: "{book_title} - Updated"
+     pages: 350
+   assert:
+     status: 200
+     json:
+       paths:
+         $.title: "Capture Test Book - Updated"
+         $.pages: 350

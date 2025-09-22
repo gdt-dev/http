@@ -76,6 +76,11 @@ func setup(ctx context.Context) context.Context {
 	serverFixture := gdthttp.NewServerFixture(srv.Router(), false /* useTLS */)
 	ctx = gdt.RegisterFixture(ctx, "books_api", serverFixture)
 	ctx = gdt.RegisterFixture(ctx, "books_data", dataFixture())
+
+	// Register capture fixture for variable storage
+	captureFixture := gdthttp.NewCaptureFixture()
+	ctx = gdt.RegisterFixture(ctx, "http_capture", captureFixture)
+
 	return ctx
 }
 
@@ -128,6 +133,21 @@ func TestPutMultipleBooks(t *testing.T) {
 	require := require.New(t)
 
 	fp := filepath.Join("testdata", "put-multiple-books.yaml")
+
+	ctx := gdt.NewContext()
+	ctx = setup(ctx)
+
+	s, err := gdt.From(fp)
+	require.Nil(err)
+	require.NotNil(s)
+
+	s.Run(ctx, t)
+}
+
+func TestCaptureFeature(t *testing.T) {
+	require := require.New(t)
+
+	fp := filepath.Join("testdata", "capture-test.yaml")
 
 	ctx := gdt.NewContext()
 	ctx = setup(ctx)

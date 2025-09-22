@@ -13,6 +13,16 @@ import (
 	gdtjson "github.com/gdt-dev/gdt/assertion/json"
 )
 
+// PollConfig contains configuration for polling assertions
+type PollConfig struct {
+	// Interval is the time to wait between polling attempts
+	Interval string `yaml:"interval,omitempty"`
+	// Timeout is the maximum time to wait for the condition to be met
+	Timeout string `yaml:"timeout,omitempty"`
+	// Condition contains the assertions that must be met to stop polling
+	Condition *Expect `yaml:"condition,omitempty"`
+}
+
 // Expect contains one or more assertions about an HTTP response
 type Expect struct {
 	// JSON contains the assertions about JSON data in the response
@@ -25,6 +35,8 @@ type Expect struct {
 	// Status contains the numeric HTTP status code (e.g. 200 or 404) that
 	// should be returned in the HTTP response
 	Status *int `yaml:"status,omitempty"`
+	// Poll contains configuration for polling assertions
+	Poll *PollConfig `yaml:"poll,omitempty"`
 }
 
 // headerEqual returns true if the supplied http.Response contains an expected
@@ -104,7 +116,8 @@ func (a *assertions) OK(ctx context.Context) bool {
 	}
 	if exp.JSON != nil {
 		ja := gdtjson.New(exp.JSON, a.b)
-		if !ja.OK(ctx) {
+		jsonOK := ja.OK(ctx)
+		if !jsonOK {
 			for _, f := range ja.Failures() {
 				a.Fail(f)
 			}

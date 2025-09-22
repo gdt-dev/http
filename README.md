@@ -24,6 +24,8 @@ what the HTTP response should contain.
 
 **Enhanced Features:**
 - ✅ Custom HTTP headers support
+- ✅ Response capture with JSONPath expressions
+- ✅ Variable substitution in URLs, headers, and request data
 - ✅ All original gdt-http functionality
 
 ## Installation
@@ -69,7 +71,8 @@ Each of the test unit objects have the following attributes:
     X-Custom-Header: custom-value
   ```
 * `data`: (optional) if present, will be encoded into the HTTP request
-  payload. Elements of the `data` structure may be JSONPath expressions (see [below](#use-jsonpath-expressions-to-substitute-fixture-data))
+  payload. Elements of the `data` structure may be JSONPath expressions (see [below](#use-jsonpath-expressions-to-substitute-fixture-data)) or captured variables from previous tests
+* `capture`: (optional) map of variable names to JSONPath expressions that extract values from the HTTP response body and store them for use in subsequent tests
 * `assert`: (optional) object describing the **assertions** to make about the
   HTTP response received after issuing the HTTP request
 
@@ -276,6 +279,113 @@ Then you can grab any data in the fixture using a JSONPath expression in the
 ```yaml
    data:
      author_id: $.authors.by_name["Ernest Hemingway"].id
+```
+
+### Capture response values for later use
+
+The `capture` field allows you to extract values from HTTP response bodies using JSONPath expressions and store them in variables for use in subsequent tests. This is particularly useful for testing scenarios where later test steps depend on values returned by earlier steps.
+
+#### Basic capture usage
+
+```yaml
+fixtures:
+ - books_api
+ - http_capture  # Required fixture for variable storage
+tests:
+ - name: create a new book and capture its ID
+   POST: /books
+   data:
+     title: Capture Test Book
+     author: John Doe
+   capture:
+     book_id: "$.id"          # Extract the book ID from response
+     book_title: "$.title"    # Extract the book title from response
+   assert:
+     status: 201
+
+ - name: get the created book using captured ID
+   GET: /books/{book_id}      # Use captured variable in URL
+   assert:
+     status: 200
+     json:
+       paths:
+         $.id: "{book_id}"    # Reference captured variable in assertion
+         $.title: "{book_title}"
+```
+
+#### Variable substitution syntax
+
+Captured variables can be referenced in subsequent tests using the `{variable_name}` syntax in:
+
+- **URLs**: `GET: /books/{book_id}`
+- **Headers**: `Authorization: Bearer {auth_token}`
+- **Request data**: Any string value in the data structure
+
+#### Multiple variables example
+
+```yaml
+tests:
+ - name: authenticate and create resource
+   POST: /auth/login
+   data:
+     username: testuser
+     password: testpass
+   capture:
+     auth_token: "$.token"
+     user_id: "$.user.id"
+     expires_at: "$.expires_at"
+   assert:
+     status: 200
+
+ - name: create protected resource
+   POST: /users/{user_id}/posts
+   headers:
+     Authorization: Bearer {auth_token}
+   data:
+     title: Test Post
+     content: This is a test post
+   capture:
+     post_id: "$.id"
+   assert:
+     status: 201
+
+ - name: verify created post
+   GET: /posts/{post_id}
+   headers:
+     Authorization: Bearer {auth_token}
+   assert:
+     status: 200
+     json:
+       paths:
+         $.author.id: "{user_id}"
+```
+
+#### Setting up capture fixture
+
+To use the capture functionality, you must register the capture fixture in your test setup:
+
+```go
+import gdthttp "github.com/doingdd/http"
+
+func setup(ctx context.Context) context.Context {
+    // ... other fixture setup ...
+
+    // Register capture fixture for variable storage
+    captureFixture := gdthttp.NewCaptureFixture()
+    ctx = gdt.RegisterFixture(ctx, "http_capture", captureFixture)
+
+    return ctx
+}
+```
+
+And reference it in your YAML test file:
+
+```yaml
+fixtures:
+ - books_api
+ - http_capture  # Required for capture functionality
+tests:
+ - # ... your tests with capture ...
 ```
 
 ### Specify expected response values (`assert.json.paths`)

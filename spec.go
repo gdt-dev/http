@@ -8,6 +8,9 @@ import (
 	api "github.com/gdt-dev/gdt/api"
 )
 
+// Capture describes how to capture response values into variables using JSONPath
+type Capture map[string]string
+
 // Spec describes a test of a single HTTP request and response
 type Spec struct {
 	api.Spec
@@ -29,6 +32,8 @@ type Spec struct {
 	Headers map[string]string `yaml:"headers,omitempty"`
 	// JSON payload to send along in request
 	Data interface{} `yaml:"data,omitempty"`
+	// Capture contains JSONPath expressions to extract values from response
+	Capture Capture `yaml:"capture,omitempty"`
 	// Assert is the assertions for the HTTP response
 	Assert *Expect `yaml:"assert,omitempty"`
 }

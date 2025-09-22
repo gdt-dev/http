@@ -76,6 +76,15 @@ func (s *Spec) UnmarshalYAML(node *yaml.Node) error {
 				return err
 			}
 			s.Data = data
+		case "capture":
+			if valNode.Kind != yaml.MappingNode {
+				return api.ExpectedMapAt(valNode)
+			}
+			var capture Capture
+			if err := valNode.Decode(&capture); err != nil {
+				return err
+			}
+			s.Capture = capture
 		case "assert":
 			if valNode.Kind != yaml.MappingNode {
 				return api.ExpectedMapAt(valNode)

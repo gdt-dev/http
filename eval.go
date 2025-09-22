@@ -14,6 +14,7 @@ import (
 	nethttp "net/http"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/gdt-dev/gdt/api"
 	gdtcontext "github.com/gdt-dev/gdt/context"
@@ -59,7 +60,10 @@ func (s *Spec) getURL(ctx context.Context) (string, error) {
 
 	d := fromBaseDefaults(s.Defaults)
 	base := d.BaseURLFromContext(ctx)
-	return base + s.URL, nil
+
+	// Apply variable substitution to URL
+	url := substituteVariables(ctx, s.URL)
+	return base + url, nil
 }
 
 // processRequestData looks through the raw data interface{} that was
@@ -167,6 +171,8 @@ func (s *Spec) preprocessMapValue(
 		return s.preprocessMap(ctx, v, vt.Key(), vt.Elem())
 	case reflect.String:
 		valStr := v.String()
+
+		// First check if it's a fixture reference
 		fixtures := gdtcontext.Fixtures(ctx)
 		for _, f := range fixtures {
 			if !f.HasState(valStr) {
@@ -174,6 +180,13 @@ func (s *Spec) preprocessMapValue(
 			}
 			trValStr := f.State(valStr)
 			m.SetMapIndex(k, reflect.ValueOf(trValStr))
+			return nil
+		}
+
+		// If not a fixture reference, apply variable substitution
+		substitutedValue := substituteVariables(ctx, valStr)
+		if substitutedValue != valStr {
+			m.SetMapIndex(k, reflect.ValueOf(substitutedValue))
 		}
 	default:
 		return nil
@@ -218,7 +231,9 @@ func (s *Spec) Eval(ctx context.Context) (*api.Result, error) {
 	// Set custom headers if provided
 	if s.Headers != nil {
 		for key, value := range s.Headers {
-			req.Header.Set(key, value)
+			// Apply variable substitution to header values
+			substitutedValue := substituteVariables(ctx, value)
+			req.Header.Set(key, substitutedValue)
 		}
 	}
 
@@ -247,8 +262,22 @@ func (s *Spec) Eval(ctx context.Context) (*api.Result, error) {
 	if len(b) > 0 {
 		gdtdebug.Println(ctx, "http: < %s", b)
 	}
+
+	// Process capture rules before assertions
+	if err := s.processCaptureRules(ctx, b); err != nil {
+		return nil, err
+	}
+
 	exp := s.Assert
 	if exp != nil {
+		// Check if polling is required
+		if exp.Poll != nil {
+			pollErr := s.handlePolling(ctx, exp)
+			if pollErr != nil {
+				return nil, pollErr
+			}
+		}
+
 		a := newAssertions(exp, resp, b)
 		if !a.OK(ctx) {
 			fails = a.Failures()
@@ -264,4 +293,114 @@ func (s *Spec) Eval(ctx context.Context) (*api.Result, error) {
 		api.WithFailures(fails...),
 		api.WithData(pluginName, runData),
 	), nil
+}
+
+// handlePolling implements the polling logic for HTTP assertions
+func (s *Spec) handlePolling(ctx context.Context, exp *Expect) error {
+	if exp.Poll == nil {
+		return nil
+	}
+
+	// Parse polling configuration
+	interval, err := time.ParseDuration(exp.Poll.Interval)
+	if err != nil {
+		interval = 5 * time.Second // default interval
+	}
+
+	timeout, err := time.ParseDuration(exp.Poll.Timeout)
+	if err != nil {
+		timeout = 60 * time.Second // default timeout
+	}
+
+	gdtdebug.Println(ctx, "http: starting polling with interval=%v, timeout=%v", interval, timeout)
+
+	// Start polling
+	startTime := time.Now()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		// Check timeout
+		if time.Since(startTime) > timeout {
+			return fmt.Errorf("polling timeout exceeded after %v", timeout)
+		}
+
+		// Execute HTTP request
+		url, err := s.getURL(ctx)
+		if err != nil {
+			return err
+		}
+
+		var body io.Reader
+		if s.Data != nil {
+			s.processRequestData(ctx)
+			jsonBody, err := json.Marshal(s.Data)
+			if err != nil {
+				return err
+			}
+			body = bytes.NewReader(jsonBody)
+		}
+
+		req, err := nethttp.NewRequest(s.Method, url, body)
+		if err != nil {
+			return err
+		}
+
+		// Set custom headers if provided
+		if s.Headers != nil {
+			for key, value := range s.Headers {
+				// Apply variable substitution to header values
+				substitutedValue := substituteVariables(ctx, value)
+				req.Header.Set(key, substitutedValue)
+			}
+		}
+
+		c := s.client(ctx)
+
+		resp, err := c.Do(req)
+		if err != nil {
+			return err
+		}
+
+		// Read response body
+		b, err := ioutil.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return err
+		}
+
+		gdtdebug.Println(ctx, "http: polling attempt - status: %d", resp.StatusCode)
+		gdtdebug.Println(ctx, "http: polling response body: %s", string(b))
+
+		// Check if poll condition is met
+		if exp.Poll.Condition != nil {
+			gdtdebug.Println(ctx, "http: polling condition - expected status: %v", exp.Poll.Condition.Status)
+			if exp.Poll.Condition.JSON != nil {
+				gdtdebug.Println(ctx, "http: polling condition - has JSON assertion")
+			} else {
+				gdtdebug.Println(ctx, "http: polling condition - NO JSON assertion")
+			}
+
+			a := newAssertions(exp.Poll.Condition, resp, b)
+			isOK := a.OK(ctx)
+			gdtdebug.Println(ctx, "http: polling condition check result: %v", isOK)
+			if isOK {
+				gdtdebug.Println(ctx, "http: polling condition met, stopping")
+				return nil
+			} else {
+				failures := a.Failures()
+				if len(failures) > 0 {
+					gdtdebug.Println(ctx, "http: polling condition not met, failures: %v", failures)
+				}
+			}
+		}
+
+		// Wait for next polling interval
+		select {
+		case <-ticker.C:
+			continue
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
